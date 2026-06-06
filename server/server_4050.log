@@ -1,0 +1,8 @@
+nohup: ignoring input
+VoltQC API server running on http://0.0.0.0:4050
+  Database: /home/team/shared/voltqc.db
+sqlite3 error: Error: stepping, attempt to write a readonly database (8)
+
+AI Analysis output: 
+sqlite3 error: Error: stepping, attempt to write a readonly database (8)
+

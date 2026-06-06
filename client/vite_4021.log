@@ -1,0 +1,8 @@
+nohup: ignoring input
+
+  VITE v6.4.3  ready in 185 ms
+
+  ➜  Local:   http://localhost:4021/
+  ➜  Network: http://169.254.0.21:4021/
+6:35:52 AM [vite] vite.config.js changed, restarting server...
+6:35:52 AM [vite] server restarted.
