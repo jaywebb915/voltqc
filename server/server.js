@@ -1,3 +1,7 @@
+import { scanBlueprint } from './gemini_scan.js';
+import dotenv from 'dotenv';
+dotenv.config();
+
 import Database from 'better-sqlite3';
 import express from 'express';
 import cors from 'cors';
@@ -203,6 +207,37 @@ app.patch('/api/checklist/:id', (req, res) => {
     }
     res.json({ success: true });
   } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/scan', async (req, res) => {
+  const { filename } = req.body;
+  if (!filename) return res.status(400).json({ error: 'filename required' });
+  
+  const filePath = path.join(UPLOAD_DIR, filename);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'File not found. Please upload the blueprint first.' });
+  }
+
+  try {
+    const checklist = getChecklistData();
+    const findings = await scanBlueprint(filePath, checklist);
+    
+    const stmt = db.prepare('UPDATE QC_Checklist SET Status = ?, Comments = ? WHERE id = ?');
+    for (const f of findings) {
+      if (f.id && f.status) {
+        stmt.run(f.status, f.comment || '', parseInt(f.id));
+      }
+    }
+
+    res.json({ 
+      success: true, 
+      items_updated: findings.length,
+      findings 
+    });
+  } catch(e) {
+    console.error('Scan error:', e);
     res.status(500).json({ error: e.message });
   }
 });
