@@ -6,6 +6,7 @@ import DocumentUpload from './components/DocumentUpload';
 import DocumentList from './components/DocumentList';
 import DocumentDetail from './components/DocumentDetail';
 import Dashboard from './components/Dashboard';
+import ProjectMetadata from './components/ProjectMetadata';
 
 const API_BASE = '/api';
 
@@ -212,14 +213,23 @@ export default function App() {
       <Header score={score} activeTab={activeTab} onTabChange={setActiveTab} />
       <div className="flex-1 flex overflow-hidden">
         <div className="w-[480px] min-w-[480px] flex flex-col border-r border-volt-border">
+          <ProjectMetadata />
           <Scorecard
             sections={sections}
             activeSection={activeSection}
             onSectionChange={handleSectionChange}
             checklist={checklist.filter(i => (i.Section || 'Uncategorized') === activeSection)}
             selectedItem={selectedItem}
-            onItemClick={handleItemClick}
-            currentSection={currentSection}
+          onItemClick={handleItemClick}
+currentSection={currentSection}
+onStatusChange={async (id, status) => {
+  await fetch(`/api/checklist/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ Status: status }),
+  });
+  fetchData();
+}}
           />
         </div>
         <div className="flex-1 flex flex-col">

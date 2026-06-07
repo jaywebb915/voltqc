@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 import ScoreRing from './ScoreRing';
 
 const STATUS_CONFIG = {
-  Pass: { bg: 'bg-volt-green-bg', text: 'text-volt-green', dot: 'bg-volt-green', label: 'PASS' },
-  Fail: { bg: 'bg-volt-red-bg', text: 'text-volt-red', dot: 'bg-volt-red', label: 'FAIL' },
+  YES: { bg: 'bg-volt-green-bg', text: 'text-volt-green', dot: 'bg-volt-green', label: 'YES' },
+  NO: { bg: 'bg-volt-red-bg', text: 'text-volt-red', dot: 'bg-volt-red', label: 'NO' },
   'N/A': { bg: 'bg-volt-amber-bg', text: 'text-volt-amber', dot: 'bg-volt-amber', label: 'N/A' },
+  Pending: { bg: 'bg-volt-surface-bg', text: 'text-volt-text-muted', dot: 'bg-volt-text-muted', label: 'PENDING' },
 };
 
 function SectionTab({ name, active, passed, failed, isSelected, onClick }) {
@@ -32,20 +33,30 @@ function SectionTab({ name, active, passed, failed, isSelected, onClick }) {
   );
 }
 
-function ChecklistItem({ item, isSelected, onClick }) {
-  const cfg = STATUS_CONFIG[item.Status] || STATUS_CONFIG['N/A'];
-  const isFailOrFlagged = item.Status === 'Fail' || (item.Comments && item.Comments.toLowerCase().includes('flag'));
+function ChecklistItem({ item, isSelected, onClick, onStatusChange }) {
+  const cfg = STATUS_CONFIG[item.Status] || STATUS_CONFIG['Pending'];
+  const [showActions, setShowActions] = useState(false);
+
+  const handleClick = () => {
+    onClick(item);
+    setShowActions(!showActions || !isSelected);
+  };
+
+  const handleStatus = (e, status) => {
+    e.stopPropagation();
+    onStatusChange(item.id, status);
+    setShowActions(false);
+  };
 
   return (
-    <button
-      onClick={() => onClick(item)}
+    <div
       className={`w-full text-left animate-slide-up ${
         isSelected ? 'bg-volt-surface2' : 'hover:bg-volt-surface2/50'
       } transition-all duration-150 border-l-2 ${
         isSelected ? 'border-volt-red' : 'border-transparent'
       }`}
     >
-      <div className="px-4 py-3">
+      <div className="px-4 py-3 cursor-pointer" onClick={handleClick}>
         <div className="flex items-start justify-between gap-3">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
@@ -58,33 +69,44 @@ function ChecklistItem({ item, isSelected, onClick }) {
                   {item.Inspection_Type_Tag}
                 </span>
               )}
-              <span className="text-[10px] font-mono text-volt-text-muted ml-auto">
+              <span className="text-[10px] font-mono text-volt-text-muted">
                 {item.Point_Value}pts
               </span>
             </div>
-            <p className="text-sm text-volt-text leading-snug">
-              {item.Question}
-            </p>
+            <p className="text-sm text-volt-text leading-snug">{item.Question}</p>
             {item.Comments && (
-              <p className="text-[11px] text-volt-text-dim mt-1.5 line-clamp-2">
-                {item.Comments}
-              </p>
+              <p className="text-[11px] text-volt-text-muted mt-1.5 line-clamp-2">{item.Comments}</p>
             )}
           </div>
-          {isFailOrFlagged && (
-            <div className="shrink-0 mt-1">
-              <svg className="w-4 h-4 text-volt-red" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            </div>
-          )}
         </div>
       </div>
-    </button>
+      {isSelected && showActions && (
+        <div className="px-4 pb-3 flex items-center gap-2">
+          <span className="text-[10px] font-mono text-volt-text-muted mr-1">RESPONSE:</span>
+          {['YES', 'NO', 'N/A'].map(status => (
+            <button
+              key={status}
+              onClick={e => handleStatus(e, status)}
+              className={`px-3 py-1 text-[11px] font-mono rounded border transition-all ${
+                item.Status === status
+                  ? status === 'YES'
+                    ? 'bg-volt-green-bg border-volt-green text-volt-green'
+                    : status === 'NO'
+                    ? 'bg-volt-red-bg border-volt-red text-volt-red'
+                    : 'bg-volt-amber-bg border-volt-amber text-volt-amber'
+                  : 'border-volt-border text-volt-text-muted hover:border-volt-text hover:text-volt-text'
+              }`}
+            >
+              {status}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
-export default function Scorecard({
+ export default function Scorecard({
   sections,
   activeSection,
   onSectionChange,
@@ -92,6 +114,7 @@ export default function Scorecard({
   selectedItem,
   onItemClick,
   currentSection,
+  onStatusChange,
 }) {
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -175,12 +198,13 @@ export default function Scorecard({
           </div>
         ) : (
           filteredItems.map(item => (
-            <ChecklistItem
-              key={item.id}
-              item={item}
-              isSelected={selectedItem?.id === item.id}
-              onClick={onItemClick}
-            />
+ <ChecklistItem
+  key={item.id}
+  item={item}
+  isSelected={selectedItem?.id === item.id}
+  onClick={onItemClick}
+  onStatusChange={onStatusChange}
+/>
           ))
         )}
       </div>
