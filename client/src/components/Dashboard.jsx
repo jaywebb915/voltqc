@@ -215,7 +215,18 @@ export default function Dashboard({ onNavigate }) {
                 {new Date(overview.lastReviewDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
               </p>
             </div>
-            <ScoreRing percentage={overview.overallScore} size={56} strokeWidth={4} />
+            <div className={`px-3 py-1.5 rounded-full border ${
+  overview.overallScore >= overview.threshold
+    ? 'border-volt-green bg-volt-green-bg' 
+    : 'border-volt-red bg-volt-red-bg'
+}`}>
+  <span className={`text-sm font-bold font-mono ${
+    overview.overallScore >= overview.threshold ? 'text-volt-green' : 'text-volt-red'
+  }`}>
+    {overview.overallScore.toFixed(1)}
+  </span>
+  <span className="text-[9px] font-mono text-volt-text-muted ml-1">SCORE</span>
+</div>
           </div>
         </div>
       </div>

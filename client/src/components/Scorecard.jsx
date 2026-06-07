@@ -157,7 +157,18 @@ function ChecklistItem({ item, isSelected, onClick, onStatusChange }) {
               </p>
             </div>
             <div className="flex items-center gap-2">
-              <ScoreRing percentage={currentSection.percentage} size={44} strokeWidth={4} />
+              <div className={`px-3 py-1.5 rounded-full border ${
+  currentSection.percentage >= 85 
+    ? 'border-volt-green bg-volt-green-bg' 
+    : 'border-volt-red bg-volt-red-bg'
+}`}>
+  <span className={`text-sm font-bold font-mono ${
+    currentSection.percentage >= 85 ? 'text-volt-green' : 'text-volt-red'
+  }`}>
+    {currentSection.percentage.toFixed(1)}
+  </span>
+  <span className="text-[9px] font-mono text-volt-text-muted ml-1">SCORE</span>
+</div>
             </div>
           </div>
           {/* Progress bar */}

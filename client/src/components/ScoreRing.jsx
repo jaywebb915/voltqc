@@ -6,10 +6,11 @@ export default function ScoreRing({ percentage = 0, size = 120, strokeWidth = 6 
   const offset = circumference - (Math.min(percentage, 100) / 100) * circumference;
   const passed = percentage >= 85;
 
+  const fontSize = percentage >= 100 ? 'text-base' : percentage >= 10 ? 'text-lg' : 'text-2xl';
+
   return (
     <div className="relative inline-flex items-center justify-center">
       <svg width={size} height={size} className="transform -rotate-90">
-        {/* Background ring */}
         <circle
           cx={size / 2}
           cy={size / 2}
@@ -18,7 +19,6 @@ export default function ScoreRing({ percentage = 0, size = 120, strokeWidth = 6 
           stroke="#1A1A20"
           strokeWidth={strokeWidth}
         />
-        {/* Foreground ring */}
         <circle
           cx={size / 2}
           cy={size / 2}
@@ -43,7 +43,7 @@ export default function ScoreRing({ percentage = 0, size = 120, strokeWidth = 6 
         </defs>
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className={`text-2xl font-bold font-mono ${
+        <span className={`${fontSize} font-bold font-mono ${
           passed ? 'text-volt-green' : 'text-volt-red'
         }`}>
           {percentage.toFixed(1)}
