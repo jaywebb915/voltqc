@@ -258,7 +258,7 @@ app.post('/api/documents/:id/analyze', async (req, res) => {
 app.post('/api/scan', async (req, res) => {
   const { filename } = req.body;
   if (!filename) return res.status(400).json({ error: 'filename required' });
-  
+
   const filePath = path.join(UPLOAD_DIR, filename);
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ error: 'File not found. Please upload the blueprint first.' });
@@ -267,7 +267,7 @@ app.post('/api/scan', async (req, res) => {
   try {
     const checklist = getChecklistData();
     const findings = await scanBlueprint(filePath, checklist);
-    
+
     const stmt = db.prepare('UPDATE QC_Checklist SET Status = ?, Comments = ? WHERE id = ?');
     for (const f of findings) {
       if (f.id && f.status) {
@@ -275,10 +275,15 @@ app.post('/api/scan', async (req, res) => {
       }
     }
 
-    res.json({ 
-      success: true, 
+    // Mark the corresponding document as Completed
+    try {
+      db.prepare("UPDATE Documents SET status = 'Completed' WHERE filename = ?").run(filename);
+    } catch(e) { /* non-fatal */ }
+
+    res.json({
+      success: true,
       items_updated: findings.length,
-      findings 
+      findings
     });
   } catch(e) {
     console.error('Scan error:', e);
