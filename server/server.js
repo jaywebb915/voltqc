@@ -138,6 +138,19 @@ app.post('/api/documents/upload', (req, res) => {
   res.status(201).json({ id: result.lastInsertRowid, filename, status: 'Queued' });
 });
 
+app.get('/api/documents/:id/file', (req, res) => {
+  try {
+    const doc = db.prepare('SELECT * FROM Documents WHERE id = ?').get(parseInt(req.params.id));
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (!fs.existsSync(doc.filepath)) return res.status(404).json({ error: 'File not on disk' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${doc.filename}"`);
+    res.sendFile(path.resolve(doc.filepath));
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.delete('/api/documents/:id', (req, res) => {
   db.prepare('DELETE FROM Documents WHERE id = ?').run(parseInt(req.params.id));
   res.json({ success: true });
@@ -207,6 +220,37 @@ app.patch('/api/checklist/:id', (req, res) => {
     }
     res.json({ success: true });
   } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/checklist/reset', (req, res) => {
+  try {
+    db.prepare("UPDATE QC_Checklist SET Status = 'Pending', Comments = ''").run();
+    res.json({ success: true });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/documents/:id/analyze', async (req, res) => {
+  try {
+    const doc = db.prepare('SELECT * FROM Documents WHERE id = ?').get(parseInt(req.params.id));
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    const filePath = doc.filepath;
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'File not found on disk' });
+    }
+    const checklist = getChecklistData();
+    const findings = await scanBlueprint(filePath, checklist);
+    const stmt = db.prepare('UPDATE QC_Checklist SET Status = ?, Comments = ? WHERE id = ?');
+    for (const f of findings) {
+      if (f.id && f.status) stmt.run(f.status, f.comment || '', parseInt(f.id));
+    }
+    db.prepare("UPDATE Documents SET status = 'Completed' WHERE id = ?").run(doc.id);
+    res.json({ success: true, items_updated: findings.length, findings });
+  } catch(e) {
+    console.error('Analyze error:', e);
     res.status(500).json({ error: e.message });
   }
 });

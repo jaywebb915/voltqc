@@ -33,9 +33,10 @@ function SectionTab({ name, active, passed, failed, isSelected, onClick }) {
   );
 }
 
-function ChecklistItem({ item, isSelected, onClick, onStatusChange }) {
+function ChecklistItem({ item, isSelected, onClick, onStatusChange, onCommentSave }) {
   const cfg = STATUS_CONFIG[item.Status] || STATUS_CONFIG['Pending'];
   const [showActions, setShowActions] = useState(false);
+  const [localComment, setLocalComment] = useState(item.Comments || '');
 
   const handleClick = () => {
     onClick(item);
@@ -45,8 +46,18 @@ function ChecklistItem({ item, isSelected, onClick, onStatusChange }) {
   const handleStatus = (e, status) => {
     e.stopPropagation();
     onStatusChange(item.id, status);
-    setShowActions(false);
   };
+
+  const handleCommentBlur = () => {
+    if (localComment !== (item.Comments || '')) {
+      onCommentSave(item.id, localComment);
+    }
+  };
+
+  // Sync local comment if item.Comments changes externally
+  React.useEffect(() => {
+    setLocalComment(item.Comments || '');
+  }, [item.Comments]);
 
   return (
     <div
@@ -74,39 +85,54 @@ function ChecklistItem({ item, isSelected, onClick, onStatusChange }) {
               </span>
             </div>
             <p className="text-sm text-volt-text leading-snug">{item.Question}</p>
-            {item.Comments && (
+            {item.Comments && !showActions && (
               <p className="text-[11px] text-volt-text-muted mt-1.5 line-clamp-2">{item.Comments}</p>
             )}
           </div>
         </div>
       </div>
       {isSelected && showActions && (
-        <div className="px-4 pb-3 flex items-center gap-2">
-          <span className="text-[10px] font-mono text-volt-text-muted mr-1">RESPONSE:</span>
-          {['YES', 'NO', 'N/A'].map(status => (
-            <button
-              key={status}
-              onClick={e => handleStatus(e, status)}
-              className={`px-3 py-1 text-[11px] font-mono rounded border transition-all ${
-                item.Status === status
-                  ? status === 'YES'
-                    ? 'bg-volt-green-bg border-volt-green text-volt-green'
-                    : status === 'NO'
-                    ? 'bg-volt-red-bg border-volt-red text-volt-red'
-                    : 'bg-volt-amber-bg border-volt-amber text-volt-amber'
-                  : 'border-volt-border text-volt-text-muted hover:border-volt-text hover:text-volt-text'
-              }`}
-            >
-              {status}
-            </button>
-          ))}
+        <div className="px-4 pb-3 flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-mono text-volt-text-muted mr-1">RESPONSE:</span>
+            {['YES', 'NO', 'N/A'].map(status => (
+              <button
+                key={status}
+                onClick={e => handleStatus(e, status)}
+                className={`px-3 py-1 text-[11px] font-mono rounded border transition-all ${
+                  item.Status === status
+                    ? status === 'YES'
+                      ? 'bg-volt-green-bg border-volt-green text-volt-green'
+                      : status === 'NO'
+                      ? 'bg-volt-red-bg border-volt-red text-volt-red'
+                      : 'bg-volt-amber-bg border-volt-amber text-volt-amber'
+                    : 'border-volt-border text-volt-text-muted hover:border-volt-text hover:text-volt-text'
+                }`}
+              >
+                {status}
+              </button>
+            ))}
+          </div>
+          <div onClick={e => e.stopPropagation()}>
+            <label className="block text-[9px] font-mono text-volt-text-muted uppercase mb-1">
+              Comments
+            </label>
+            <textarea
+              value={localComment}
+              onChange={e => setLocalComment(e.target.value)}
+              onBlur={handleCommentBlur}
+              placeholder="Add a comment or finding..."
+              rows={2}
+              className="w-full bg-volt-bg border border-volt-border rounded px-2 py-1.5 text-[11px] text-volt-text placeholder-volt-text-muted focus:outline-none focus:border-volt-red resize-none font-mono"
+            />
+          </div>
         </div>
       )}
     </div>
   );
 }
 
- export default function Scorecard({
+export default function Scorecard({
   sections,
   activeSection,
   onSectionChange,
@@ -115,20 +141,30 @@ function ChecklistItem({ item, isSelected, onClick, onStatusChange }) {
   onItemClick,
   currentSection,
   onStatusChange,
+  onCommentSave,
+  onReset,
+  onExport,
 }) {
   const [searchQuery, setSearchQuery] = useState('');
+  const [resetting, setResetting] = useState(false);
 
   const filteredItems = checklist.filter(item =>
     !searchQuery || item.Question.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  // Compute fail counts per section
   const sectionFailCounts = {};
   const sectionPassCounts = {};
   for (const sec of sections) {
-    sectionFailCounts[sec.name] = sec.items?.filter(i => i.Status === 'Fail').length || 0;
-    sectionPassCounts[sec.name] = sec.items?.filter(i => i.Status === 'Pass').length || 0;
+    sectionFailCounts[sec.name] = sec.items?.filter(i => i.Status === 'NO').length || 0;
+    sectionPassCounts[sec.name] = sec.items?.filter(i => i.Status === 'YES').length || 0;
   }
+
+  const handleReset = async () => {
+    if (!window.confirm('Reset all checklist responses to Pending? This cannot be undone.')) return;
+    setResetting(true);
+    await onReset?.();
+    setResetting(false);
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -158,20 +194,19 @@ function ChecklistItem({ item, isSelected, onClick, onStatusChange }) {
             </div>
             <div className="flex items-center gap-2">
               <div className={`px-3 py-1.5 rounded-full border ${
-  currentSection.percentage >= 85 
-    ? 'border-volt-green bg-volt-green-bg' 
-    : 'border-volt-red bg-volt-red-bg'
-}`}>
-  <span className={`text-sm font-bold font-mono ${
-    currentSection.percentage >= 85 ? 'text-volt-green' : 'text-volt-red'
-  }`}>
-    {currentSection.percentage.toFixed(1)}
-  </span>
-  <span className="text-[9px] font-mono text-volt-text-muted ml-1">SCORE</span>
-</div>
+                currentSection.percentage >= 85
+                  ? 'border-volt-green bg-volt-green-bg'
+                  : 'border-volt-red bg-volt-red-bg'
+              }`}>
+                <span className={`text-sm font-bold font-mono ${
+                  currentSection.percentage >= 85 ? 'text-volt-green' : 'text-volt-red'
+                }`}>
+                  {currentSection.percentage.toFixed(1)}
+                </span>
+                <span className="text-[9px] font-mono text-volt-text-muted ml-1">SCORE</span>
+              </div>
             </div>
           </div>
-          {/* Progress bar */}
           <div className="mt-2 h-1 bg-volt-border rounded-full overflow-hidden">
             <div
               className={`h-full rounded-full transition-all duration-700 ${
@@ -209,26 +244,46 @@ function ChecklistItem({ item, isSelected, onClick, onStatusChange }) {
           </div>
         ) : (
           filteredItems.map(item => (
- <ChecklistItem
-  key={item.id}
-  item={item}
-  isSelected={selectedItem?.id === item.id}
-  onClick={onItemClick}
-  onStatusChange={onStatusChange}
-/>
+            <ChecklistItem
+              key={item.id}
+              item={item}
+              isSelected={selectedItem?.id === item.id}
+              onClick={onItemClick}
+              onStatusChange={onStatusChange}
+              onCommentSave={onCommentSave}
+            />
           ))
         )}
       </div>
 
-      {/* Bottom Stats */}
+      {/* Bottom Stats + Action Buttons */}
       <div className="px-4 py-2.5 bg-volt-surface border-t border-volt-border flex items-center justify-between text-[10px] font-mono shrink-0">
-        <span className="text-volt-text-muted">
-          {filteredItems.length} items
-        </span>
         <div className="flex items-center gap-3">
-          <span className="text-volt-green">{checklist.filter(i => i.Status === 'Pass').length} pass</span>
-          <span className="text-volt-red">{checklist.filter(i => i.Status === 'Fail').length} fail</span>
+          <span className="text-volt-text-muted">
+            {filteredItems.length} items
+          </span>
+          <span className="text-volt-green font-semibold">{checklist.filter(i => i.Status === 'YES').length} YES</span>
+          <span className="text-volt-red font-semibold">{checklist.filter(i => i.Status === 'NO').length} NO</span>
           <span className="text-volt-amber">{checklist.filter(i => i.Status === 'N/A').length} N/A</span>
+          <span className="text-volt-text-muted">{checklist.filter(i => !i.Status || i.Status === 'Pending').length} pending</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleReset}
+            disabled={resetting}
+            className="px-2.5 py-1 border border-volt-border text-volt-text-muted rounded text-[10px] font-mono hover:border-volt-red hover:text-volt-red transition-colors disabled:opacity-40"
+          >
+            {resetting ? 'RESETTING...' : 'RESET'}
+          </button>
+          <button
+            onClick={onExport}
+            className="px-2.5 py-1 bg-volt-red text-white rounded text-[10px] font-mono hover:bg-volt-red-hover transition-colors flex items-center gap-1"
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            EXPORT PDF
+          </button>
         </div>
       </div>
     </div>
