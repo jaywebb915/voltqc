@@ -19,6 +19,22 @@ app.use(express.json({ limit: '50mb' }));
 
 const db = new Database(DB_PATH);
 
+// Canonical section order matching the VDC QC Distribution Template
+const SECTION_ORDER = [
+  'PROCESS COMPLIANCE',
+  'AVAILABLE DESIGN INFORMATION',
+  'GENERAL DRAFTING',
+  'GENERAL DESIGN',
+  'ELECTRICAL ROOMS',
+  'SLEEVING',
+  'EMERGENCY',
+];
+
+function sectionRank(name) {
+  const idx = SECTION_ORDER.indexOf((name || '').toUpperCase());
+  return idx === -1 ? 999 : idx;
+}
+
 function getChecklistData() {
   try {
     return db.prepare('SELECT * FROM QC_Checklist').all();
@@ -30,8 +46,8 @@ function getChecklistData() {
 
 app.get('/api/checklist', (req, res) => {
   const data = getChecklistData().sort((a, b) => {
-    if (a.Section < b.Section) return -1;
-    if (a.Section > b.Section) return 1;
+    const sr = sectionRank(a.Section) - sectionRank(b.Section);
+    if (sr !== 0) return sr;
     return (a.id || 0) - (b.id || 0);
   });
   res.json(data);
@@ -68,10 +84,14 @@ app.get('/api/sections', (req, res) => {
     if (item.Status !== 'N/A') sections[sec].totalPoints += pts;
     if (item.Status === 'YES') sections[sec].passedPoints += pts;
   }
-  res.json(Object.values(sections).map(s => ({
-    ...s,
-    percentage: s.totalPoints > 0 ? Math.round((s.passedPoints / s.totalPoints) * 10000) / 100 : 0
-  })));
+  res.json(
+    Object.values(sections)
+      .sort((a, b) => sectionRank(a.name) - sectionRank(b.name))
+      .map(s => ({
+        ...s,
+        percentage: s.totalPoints > 0 ? Math.round((s.passedPoints / s.totalPoints) * 10000) / 100 : 0
+      }))
+  );
 });
 
 const UPLOAD_DIR = path.join(__dirname, '../uploads');
