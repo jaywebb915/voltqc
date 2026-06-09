@@ -232,22 +232,44 @@ app.delete('/api/documents/:id', (req, res) => {
 // style: blue border, yellow fill, black text — standard PDF FreeText objects
 // that Bluebeam (and Acrobat) can open, reposition, and edit natively.
 app.get('/api/documents/:id/annotated', async (req, res) => {
+  const reqId = parseInt(req.params.id);
+  console.log(`\n[annotated] ── Request received for document ID: ${reqId} ──`);
+
   try {
-    const doc = db.prepare('SELECT * FROM Documents WHERE id = ?').get(parseInt(req.params.id));
-    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    // ── Step 1: DB lookup ────────────────────────────────────────────────────
+    const doc = db.prepare('SELECT * FROM Documents WHERE id = ?').get(reqId);
+    if (!doc) {
+      console.error(`[annotated] FAIL — no row found for id=${reqId}`);
+      return res.status(404).json({ error: `Document not found (id=${reqId})` });
+    }
+    console.log(`[annotated] DB row: id=${doc.id} filename="${doc.filename}" status="${doc.status}"`);
+    console.log(`[annotated] stored filepath: ${doc.filepath ?? '(null)'}`);
+
+    // ── Step 2: Resolve the actual file path ─────────────────────────────────
+    const storedOk   = !!(doc.filepath && fs.existsSync(doc.filepath));
+    const fallback   = path.join(UPLOAD_DIR, doc.filename);
+    const fallbackOk = fs.existsSync(fallback);
+    console.log(`[annotated] stored path exists on disk : ${storedOk}`);
+    console.log(`[annotated] fallback path              : ${fallback}`);
+    console.log(`[annotated] fallback exists on disk    : ${fallbackOk}`);
+
     const filePath = resolveDocPath(doc);
+    console.log(`[annotated] resolveDocPath() → ${filePath ?? 'NULL (not found)'}`);
+
     if (!filePath) {
-      return res.status(404).json({
-        error: `File not on disk. Expected at: ${doc.filepath || path.join(UPLOAD_DIR, doc.filename)}`
-      });
+      const errMsg = `File not on disk. Tried stored path "${doc.filepath}" and fallback "${fallback}"`;
+      console.error(`[annotated] FAIL — ${errMsg}`);
+      return res.status(404).json({ error: errMsg });
     }
 
-    // Fetch all NO items from the checklist (these are the flagged/failed items)
+    // ── Step 3: Load PDF ─────────────────────────────────────────────────────
     const failedItems = db.prepare(
       "SELECT * FROM QC_Checklist WHERE Status = 'NO' ORDER BY id"
     ).all();
+    console.log(`[annotated] NO items to annotate: ${failedItems.length}`);
 
     const pdfBytes = fs.readFileSync(filePath);
+    console.log(`[annotated] PDF read from disk: ${pdfBytes.length} bytes`);
     const pdfDoc   = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
 
     if (failedItems.length > 0) {
@@ -332,13 +354,15 @@ app.get('/api/documents/:id/annotated', async (req, res) => {
 
     const annotatedBytes = await pdfDoc.save();
     const baseName = path.parse(doc.filename).name;
+    console.log(`[annotated] SUCCESS — sending ${annotatedBytes.length} bytes as "annotated_${baseName}.pdf"`);
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition',
       `attachment; filename="annotated_${baseName}.pdf"`);
     res.send(Buffer.from(annotatedBytes));
   } catch(e) {
-    console.error('Annotated export error:', e);
+    console.error('[annotated] EXCEPTION:', e.message);
+    console.error(e.stack);
     res.status(500).json({ error: e.message });
   }
 });

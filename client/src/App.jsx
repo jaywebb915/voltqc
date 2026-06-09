@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { PDFDocument } from 'pdf-lib';
@@ -28,6 +28,10 @@ export default function App() {
   const [selectedDoc, setSelectedDoc] = useState(null);
   const [docsLoading, setDocsLoading] = useState(false);
   const [activePdfId, setActivePdfId] = useState(null); // doc shown in QC PDF viewer
+  // Ref so the export function always reads the *current* value even if the
+  // useCallback closure was captured before the latest state update.
+  const activePdfIdRef = useRef(null);
+  useEffect(() => { activePdfIdRef.current = activePdfId; }, [activePdfId]);
 
   // ─── QC Data ────────────────────────────────────────────────────────────────
   const fetchData = useCallback(async () => {
@@ -149,7 +153,17 @@ export default function App() {
   // ─── Export PDF (QC report + annotated blueprint merged) ────────────────────
   const [exporting, setExporting] = useState(false);
 
+  // checklist/sections/score are read from refs so the callback is always fresh.
+  // activePdfId is also read from its ref to guarantee the current value.
+  const checklistRef = useRef(checklist);
+  const sectionsRef  = useRef(sections);
+  const scoreRef     = useRef(score);
+  useEffect(() => { checklistRef.current = checklist; }, [checklist]);
+  useEffect(() => { sectionsRef.current  = sections;  }, [sections]);
+  useEffect(() => { scoreRef.current     = score;     }, [score]);
+
   const handleExportPdf = useCallback(async () => {
+    if (exporting) return;
     setExporting(true);
     try {
       await doExportPdf();
@@ -159,11 +173,19 @@ export default function App() {
     } finally {
       setExporting(false);
     }
+  // handleExportPdf itself never needs to re-create — all live data is read
+  // from refs at call-time, so an empty dep array is intentional here.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [checklist, sections, score, activePdfId]);
+  }, [exporting]);
 
-  // Separated so the async body can reference state at call time
   async function doExportPdf() {
+    // Read all state from refs so we always get the current values,
+    // regardless of when this callback was last captured.
+    const checklist  = checklistRef.current;
+    const sections   = sectionsRef.current;
+    const score      = scoreRef.current;
+    const pdfId      = activePdfIdRef.current;
+    console.log('[export] activePdfId from ref:', pdfId);
     const meta = (() => {
       try { return JSON.parse(localStorage.getItem('voltqc_project_metadata') || '{}'); }
       catch { return {}; }
@@ -301,14 +323,18 @@ export default function App() {
     const filename  = `${label}_QC_Report_${dateStamp}.pdf`;
 
     // ── Merge with annotated blueprint if one is loaded ────────────────────
-    if (activePdfId) {
+    if (pdfId) {
       try {
         // Get QC report as raw bytes
         const qcBytes = doc.output('arraybuffer');
 
         // Fetch annotated blueprint from server
-        const bpRes = await fetch(`${API_BASE}/documents/${activePdfId}/annotated`);
-        if (!bpRes.ok) throw new Error(`Blueprint fetch failed: ${bpRes.status}`);
+        console.log(`[export] fetching annotated blueprint for doc id=${pdfId}`);
+        const bpRes = await fetch(`${API_BASE}/documents/${pdfId}/annotated`);
+        if (!bpRes.ok) {
+          const errBody = await bpRes.text().catch(() => '');
+          throw new Error(`Blueprint fetch failed: HTTP ${bpRes.status} — ${errBody}`);
+        }
         const bpBytes = await bpRes.arrayBuffer();
 
         // Merge with pdf-lib
