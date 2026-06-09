@@ -56,9 +56,11 @@ export default function PdfViewer({ pdfUrl, selectedItem }) {
 
   // ── Fit-to-width helper ─────────────────────────────────────────────────────
   const fitToWidth = useCallback((page, rotation) => {
-    const containerW = containerRef.current?.clientWidth ?? 800;
-    // Use scale=1 viewport to get the natural page width at the given rotation
-    const vp = page.getViewport({ scale: 1, rotation: rotation % 360 });
+    // clientWidth can be 0 if called before the DOM has painted (e.g. during
+    // the load callback while the spinner is still mounted). Fall back to a
+    // reasonable default so we never divide by zero or produce an absurd scale.
+    const containerW = (containerRef.current?.clientWidth ?? 0) || 800;
+    const vp  = page.getViewport({ scale: 1, rotation: (rotation ?? 0) % 360 });
     // -32 for 2×16px padding inside the scroll area
     const fit = Math.max(0.3, Math.min((containerW - 32) / vp.width, 5.0));
     setScale(+fit.toFixed(3));
@@ -94,12 +96,15 @@ export default function PdfViewer({ pdfUrl, selectedItem }) {
         pdfRef.current = pdf;
         setNumPages(pdf.numPages);
 
-        // Auto-fit page 1 to pane width on first load
-        const page     = await pdf.getPage(1);
-        const rotation = page.rotate; // embedded rotation
-        fitToWidth(page, rotation);
-
+        // Grab page 1 for the initial fit-to-width calculation.
+        const page = await pdf.getPage(1);
+        // Clear loading state first so React paints the canvas container,
+        // then measure its real clientWidth via a double-rAF (two animation
+        // frames ensures the browser has completed layout after re-render).
         setLoading(false);
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          if (!cancelled) fitToWidth(page, page.rotate);
+        }));
       })
       .catch(err => {
         if (cancelled) return;
@@ -177,7 +182,10 @@ export default function PdfViewer({ pdfUrl, selectedItem }) {
   const itemCfg = selectedItem ? (STATUS_COLORS[selectedItem.Status] || STATUS_COLORS.Pending) : null;
 
   return (
-    <div className="flex flex-col h-full bg-volt-bg">
+    // min-h-0 is required: flex children default to min-height:auto, which lets
+    // them grow past their container. Without it, a large PDF page pushes the
+    // toolbar off screen instead of staying inside the bounded pane.
+    <div className="flex flex-col h-full min-h-0 bg-volt-bg">
 
       {/* ── Toolbar ────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-3 py-2 bg-volt-surface border-b border-volt-border shrink-0">
@@ -273,9 +281,11 @@ export default function PdfViewer({ pdfUrl, selectedItem }) {
       )}
 
       {/* ── Canvas / scroll area ──────────────────────────────────────────── */}
+      {/* min-h-0 prevents this flex child from expanding to fit the canvas.   */}
+      {/* overflow-auto keeps the canvas scrollable inside the fixed pane.     */}
       <div
         ref={containerRef}
-        className="flex-1 overflow-auto bg-[#111] flex items-start justify-center p-4"
+        className="flex-1 min-h-0 overflow-auto bg-[#111] flex items-start justify-center p-4"
       >
         {!pdfUrl ? (
           <EmptyState />

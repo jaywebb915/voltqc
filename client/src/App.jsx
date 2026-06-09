@@ -323,35 +323,48 @@ export default function App() {
     const filename  = `${label}_QC_Report_${dateStamp}.pdf`;
 
     // ── Merge with annotated blueprint if one is loaded ────────────────────
+    console.log(`[export] pdfId=${pdfId ?? 'none'} — ${pdfId ? 'will attempt annotated merge' : 'QC-only export'}`);
+
     if (pdfId) {
       try {
         // Get QC report as raw bytes
         const qcBytes = doc.output('arraybuffer');
+        console.log(`[export] QC report bytes: ${qcBytes.byteLength}`);
 
         // Fetch annotated blueprint from server
-        console.log(`[export] fetching annotated blueprint for doc id=${pdfId}`);
+        console.log(`[export] GET /api/documents/${pdfId}/annotated …`);
         const bpRes = await fetch(`${API_BASE}/documents/${pdfId}/annotated`);
+        console.log(`[export] annotated response status: ${bpRes.status} ${bpRes.statusText}`);
+
         if (!bpRes.ok) {
-          const errBody = await bpRes.text().catch(() => '');
+          const errBody = await bpRes.text().catch(() => '(could not read body)');
+          console.error(`[export] annotated fetch FAILED — HTTP ${bpRes.status}\nBody: ${errBody}`);
           throw new Error(`Blueprint fetch failed: HTTP ${bpRes.status} — ${errBody}`);
         }
+
         const bpBytes = await bpRes.arrayBuffer();
+        console.log(`[export] annotated blueprint bytes received: ${bpBytes.byteLength}`);
 
         // Merge with pdf-lib
+        console.log('[export] merging QC report + annotated blueprint with pdf-lib …');
         const merged  = await PDFDocument.create();
         const qcDoc   = await PDFDocument.load(qcBytes);
         const bpDoc   = await PDFDocument.load(bpBytes);
 
         const qcPages = await merged.copyPages(qcDoc, qcDoc.getPageIndices());
         qcPages.forEach(p => merged.addPage(p));
+        console.log(`[export] QC pages copied: ${qcPages.length}`);
 
         const bpPages = await merged.copyPages(bpDoc, bpDoc.getPageIndices());
         bpPages.forEach(p => merged.addPage(p));
+        console.log(`[export] blueprint pages copied: ${bpPages.length}`);
 
         const mergedBytes = await merged.save({ useObjectStreams: false });
-        const blob        = new Blob([mergedBytes], { type: 'application/pdf' });
-        const url         = URL.createObjectURL(blob);
-        const a           = document.createElement('a');
+        console.log(`[export] merged PDF bytes: ${mergedBytes.byteLength} — triggering download as "${filename}"`);
+
+        const blob = new Blob([mergedBytes], { type: 'application/pdf' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
         a.href     = url;
         a.download = filename;
         document.body.appendChild(a);
@@ -360,11 +373,13 @@ export default function App() {
         URL.revokeObjectURL(url);
         return; // done — skip plain save below
       } catch(err) {
-        console.warn('Blueprint merge failed, falling back to QC-only export:', err);
+        console.error('[export] merge error — falling back to QC-only export:', err.message);
+        console.error(err);
       }
     }
 
     // Fallback: QC report only
+    console.log(`[export] saving QC-only PDF as "${filename}"`);
     doc.save(filename);
   }
 
@@ -447,9 +462,15 @@ export default function App() {
   return (
     <div className="h-screen flex flex-col bg-volt-bg">
       <Header score={score} activeTab={activeTab} onTabChange={setActiveTab} />
-      <div className="flex-1 flex overflow-hidden">
+      {/*
+        min-h-0 on the row is critical: without it, flex children with
+        large content (e.g. a big PDF canvas) cause the row to expand
+        past h-screen, pushing the header and toolbar off the top of
+        the viewport. overflow-hidden clips any child overflow at the row.
+      */}
+      <div className="flex-1 flex overflow-hidden min-h-0">
         {/* Left: metadata + full scrollable checklist */}
-        <div className="w-[400px] min-w-[400px] flex flex-col border-r border-volt-border">
+        <div className="w-[400px] min-w-[400px] flex flex-col border-r border-volt-border min-h-0">
           <ProjectMetadata />
           <Scorecard
             sections={sections}
@@ -463,8 +484,8 @@ export default function App() {
             exporting={exporting}
           />
         </div>
-        {/* Right: real PDF viewer */}
-        <div className="flex-1 flex flex-col">
+        {/* Right: PDF viewer — min-h-0 min-w-0 so it stays inside the row */}
+        <div className="flex-1 flex flex-col min-h-0 min-w-0">
           <PdfViewer
             pdfUrl={activePdfId ? `${API_BASE}/documents/${activePdfId}/file` : null}
             selectedItem={selectedItem}
