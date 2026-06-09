@@ -8,6 +8,7 @@ import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import { PDFDocument, PDFName, PDFString, PDFNumber, PDFArray } from 'pdf-lib';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -18,6 +19,10 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
 const db = new Database(DB_PATH);
+
+// Idempotent schema migrations — add new columns if they don't exist yet
+try { db.exec("ALTER TABLE QC_Checklist ADD COLUMN sheet_number TEXT DEFAULT ''"); } catch(e) {}
+try { db.exec("ALTER TABLE QC_Checklist ADD COLUMN sheet_title  TEXT DEFAULT ''"); } catch(e) {}
 
 // Canonical section order matching the VDC QC Distribution Template
 const SECTION_ORDER = [
@@ -176,6 +181,118 @@ app.delete('/api/documents/:id', (req, res) => {
   res.json({ success: true });
 });
 
+// ── Annotated blueprint export ────────────────────────────────────────────────
+// Returns the original uploaded PDF with FreeText annotations added for every
+// checklist item that Gemini marked NO. Annotations use Bluebeam-compatible
+// style: blue border, yellow fill, black text — standard PDF FreeText objects
+// that Bluebeam (and Acrobat) can open, reposition, and edit natively.
+app.get('/api/documents/:id/annotated', async (req, res) => {
+  try {
+    const doc = db.prepare('SELECT * FROM Documents WHERE id = ?').get(parseInt(req.params.id));
+    if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (!fs.existsSync(doc.filepath)) return res.status(404).json({ error: 'File not on disk' });
+
+    // Fetch all NO items from the checklist (these are the flagged/failed items)
+    const failedItems = db.prepare(
+      "SELECT * FROM QC_Checklist WHERE Status = 'NO' ORDER BY id"
+    ).all();
+
+    const pdfBytes = fs.readFileSync(doc.filepath);
+    const pdfDoc   = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+
+    if (failedItems.length > 0) {
+      const page          = pdfDoc.getPage(0);
+      const { width, height } = page.getSize();
+
+      // Annotation dimensions and layout constants (points)
+      const ANNO_W      = Math.min(Math.round(width * 0.38), 240); // ~38% page width
+      const ANNO_H      = 62;
+      const PADDING_TOP = 20;
+      const PADDING_X   = 18;
+      const GAP         = 8;
+
+      // Collect existing page annotations so we don't overwrite them
+      const annotsKey = PDFName.of('Annots');
+      let existingRefs = [];
+      try {
+        const raw = page.node.get(annotsKey);
+        if (raw) {
+          // raw may be a PDFArray directly or a PDFRef to one
+          const arr = raw instanceof PDFArray ? raw : pdfDoc.context.lookupMaybe(raw, PDFArray);
+          if (arr) existingRefs = arr.asArray();
+        }
+      } catch(_) {}
+
+      const newRefs = [];
+
+      for (let i = 0; i < failedItems.length; i++) {
+        const item   = failedItems[i];
+        const yTop   = height - PADDING_TOP - i * (ANNO_H + GAP);
+        const yBot   = yTop - ANNO_H;
+
+        // Stop adding annotations if they'd run off the bottom of the page
+        if (yBot < PADDING_TOP) break;
+
+        // Build annotation text
+        const sheetRef = item.sheet_number ? `[${item.sheet_number}] ` : '';
+        const lines    = [
+          `${sheetRef}[NO] ${item.Section}`,
+          item.Question.length > 80 ? item.Question.slice(0, 77) + '…' : item.Question,
+        ];
+        if (item.Comments) {
+          const c = item.Comments.length > 70 ? item.Comments.slice(0, 67) + '…' : item.Comments;
+          lines.push(`→ ${c}`);
+        }
+        const contentText = lines.join('\n');
+
+        // Border style sub-dictionary
+        const bsDict = pdfDoc.context.obj({
+          Type: PDFName.of('Border'),
+          W:    PDFNumber.of(1.5),
+          S:    PDFName.of('S'),
+        });
+
+        // FreeText annotation dictionary
+        // C  = border color (blue)   IC = interior color (yellow)
+        // DA = default appearance    F  = flags (4 = Print)
+        const annotDict = pdfDoc.context.obj({
+          Type:         PDFName.of('Annot'),
+          Subtype:      PDFName.of('FreeText'),
+          Rect:         [PADDING_X, yBot, PADDING_X + ANNO_W, yTop],
+          Contents:     PDFString.of(contentText),
+          T:            PDFString.of('VoltQC'),
+          Subj:         PDFString.of('QC Failure'),
+          DA:           PDFString.of('/Helv 7 Tf 0 0 0 rg'),
+          Q:            PDFNumber.of(0),
+          F:            PDFNumber.of(4),
+          C:            [0.0, 0.47, 0.84],
+          IC:           [1.0, 1.0, 0.0],
+          BS:           bsDict,
+          CreationDate: PDFString.of(
+            `D:${new Date().toISOString().replace(/\D/g, '').slice(0, 14)}Z`
+          ),
+        });
+
+        newRefs.push(pdfDoc.context.register(annotDict));
+      }
+
+      // Write merged Annots array back to the page
+      page.node.set(annotsKey, pdfDoc.context.obj([...existingRefs, ...newRefs]));
+    }
+
+    const annotatedBytes = await pdfDoc.save();
+    const baseName = path.parse(doc.filename).name;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition',
+      `attachment; filename="annotated_${baseName}.pdf"`);
+    res.send(Buffer.from(annotatedBytes));
+  } catch(e) {
+    console.error('Annotated export error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/dashboard', (req, res) => {
   const checklist = getChecklistData();
   let docs = [];
@@ -294,23 +411,35 @@ app.post('/api/scan', async (req, res) => {
     db.prepare("UPDATE QC_Checklist SET Status = 'N/A' WHERE Question LIKE '%back edges of sleeves%'").run();
 
     const checklist = getChecklistData();
-    const findings = await scanBlueprint(filePath, checklist);
+    const { sheet_number, sheet_title, findings } = await scanBlueprint(filePath, checklist);
 
-    const stmt = db.prepare('UPDATE QC_Checklist SET Status = ?, Comments = ? WHERE id = ?');
+    // Clear sheet info on all items before writing new results
+    db.prepare("UPDATE QC_Checklist SET sheet_number = '', sheet_title = ''").run();
+
+    const stmt = db.prepare('UPDATE QC_Checklist SET Status = ?, Comments = ?, sheet_number = ?, sheet_title = ? WHERE id = ?');
     for (const f of findings) {
       if (f.id && f.status) {
-        stmt.run(f.status, f.comment || '', parseInt(f.id));
+        stmt.run(f.status, f.comment || '', sheet_number, sheet_title, parseInt(f.id));
       }
     }
 
-    // Mark the corresponding document as Completed
+    // Mark the corresponding document as Completed and store sheet info
     try {
-      db.prepare("UPDATE Documents SET status = 'Completed' WHERE filename = ?").run(filename);
+      const meta = (() => {
+        const doc = db.prepare('SELECT metadata FROM Documents WHERE filename = ?').get(filename);
+        try { return JSON.parse(doc?.metadata || '{}'); } catch(e) { return {}; }
+      })();
+      meta.sheet_number = sheet_number;
+      meta.sheet_title  = sheet_title;
+      db.prepare("UPDATE Documents SET status = 'Completed', metadata = ? WHERE filename = ?")
+        .run(JSON.stringify(meta), filename);
     } catch(e) { /* non-fatal */ }
 
     res.json({
       success: true,
       items_updated: findings.length,
+      sheet_number,
+      sheet_title,
       findings
     });
   } catch(e) {

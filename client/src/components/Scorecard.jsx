@@ -137,9 +137,12 @@ export default function Scorecard({
   onCommentSave,
   onReset,
   onExport,
+  onExportAnnotated,
+  hasActivePdf,
 }) {
-  const [searchQuery, setSearchQuery] = useState('');
-  const [resetting,   setResetting]   = useState(false);
+  const [searchQuery,       setSearchQuery]       = useState('');
+  const [resetting,         setResetting]         = useState(false);
+  const [exportingMarkup,   setExportingMarkup]   = useState(false);
 
   const searchLower = searchQuery.trim().toLowerCase();
 
@@ -174,6 +177,25 @@ export default function Scorecard({
         >
           {resetting ? 'RESETTING…' : 'RESET'}
         </button>
+
+        {/* Marked-up blueprint export — disabled when no PDF is loaded */}
+        <button
+          onClick={async () => {
+            setExportingMarkup(true);
+            await onExportAnnotated?.();
+            setExportingMarkup(false);
+          }}
+          disabled={exportingMarkup || !hasActivePdf}
+          title={hasActivePdf ? 'Export blueprint PDF with Bluebeam-compatible annotations for all NO items' : 'Upload and scan a blueprint first'}
+          className="px-2.5 py-1 border border-volt-border text-volt-text-muted rounded text-[10px] font-mono hover:border-blue-500 hover:text-blue-400 transition-colors flex items-center gap-1 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+          </svg>
+          {exportingMarkup ? 'GENERATING…' : 'MARKED-UP BLUEPRINT'}
+        </button>
+
         <button
           onClick={onExport}
           className="px-2.5 py-1 bg-volt-red text-white rounded text-[10px] font-mono hover:bg-volt-red-hover transition-colors flex items-center gap-1"

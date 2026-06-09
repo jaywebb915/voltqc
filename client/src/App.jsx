@@ -145,6 +145,35 @@ export default function App() {
     fetchData();
   }, [fetchData]);
 
+  // ─── Export Annotated Blueprint ──────────────────────────────────────────────
+  const handleExportAnnotated = useCallback(async () => {
+    if (!activePdfId) {
+      alert('No document is loaded. Upload and scan a blueprint first.');
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/documents/${activePdfId}/annotated`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Unknown error' }));
+        alert(`Annotated export failed: ${err.error}`);
+        return;
+      }
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      const cd   = res.headers.get('Content-Disposition') || '';
+      const match = cd.match(/filename="([^"]+)"/);
+      a.href     = url;
+      a.download = match ? match[1] : `annotated_blueprint_${new Date().toISOString().slice(0,10)}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch(e) {
+      alert(`Annotated export failed: ${e.message}`);
+    }
+  }, [activePdfId]);
+
   // ─── Export PDF ──────────────────────────────────────────────────────────────
   const handleExportPdf = useCallback(() => {
     const meta = (() => {
@@ -250,15 +279,15 @@ export default function App() {
       doc.text(secName.toUpperCase(), margin, y); y += 5;
       autoTable(doc, {
         startY: y, margin: { left: margin, right: margin },
-        head: [['#', 'Question', 'Type', 'Pts', 'Response', 'Comments']],
-        body: items.map((item, i) => [i + 1, item.Question, item.Inspection_Type_Tag || '',
+        head: [['#', 'Question', 'Sheet', 'Pts', 'Response', 'Comments']],
+        body: items.map((item, i) => [i + 1, item.Question, item.sheet_number || '',
           item.Point_Value || '', item.Status || 'Pending', item.Comments || '']),
         headStyles: { fillColor: [42, 42, 50], textColor: [156, 163, 175], fontSize: 7, fontStyle: 'bold' },
         bodyStyles: { fontSize: 7, fillColor: [19, 19, 22], textColor: [229, 231, 235], minCellHeight: 6 },
         columnStyles: {
           0: { cellWidth: 8, halign: 'center' }, 1: { cellWidth: 'auto' },
-          2: { cellWidth: 24 }, 3: { cellWidth: 10, halign: 'center' },
-          4: { cellWidth: 18, halign: 'center', fontStyle: 'bold' }, 5: { cellWidth: 40 },
+          2: { cellWidth: 18, halign: 'center' }, 3: { cellWidth: 10, halign: 'center' },
+          4: { cellWidth: 18, halign: 'center', fontStyle: 'bold' }, 5: { cellWidth: 35 },
         },
         didParseCell: (data) => {
           if (data.column.index === 4 && data.section === 'body')
@@ -375,6 +404,8 @@ export default function App() {
             onCommentSave={handleCommentSave}
             onReset={handleReset}
             onExport={handleExportPdf}
+            onExportAnnotated={handleExportAnnotated}
+            hasActivePdf={!!activePdfId}
           />
         </div>
         {/* Right: real PDF viewer */}
