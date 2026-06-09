@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { PDFDocument } from 'pdf-lib';
 import Scorecard from './components/Scorecard';
 import PdfViewer from './components/PdfViewer';
 import Header from './components/Header';
@@ -145,37 +146,24 @@ export default function App() {
     fetchData();
   }, [fetchData]);
 
-  // ─── Export Annotated Blueprint ──────────────────────────────────────────────
-  const handleExportAnnotated = useCallback(async () => {
-    if (!activePdfId) {
-      alert('No document is loaded. Upload and scan a blueprint first.');
-      return;
-    }
-    try {
-      const res = await fetch(`${API_BASE}/documents/${activePdfId}/annotated`);
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'Unknown error' }));
-        alert(`Annotated export failed: ${err.error}`);
-        return;
-      }
-      const blob = await res.blob();
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement('a');
-      const cd   = res.headers.get('Content-Disposition') || '';
-      const match = cd.match(/filename="([^"]+)"/);
-      a.href     = url;
-      a.download = match ? match[1] : `annotated_blueprint_${new Date().toISOString().slice(0,10)}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    } catch(e) {
-      alert(`Annotated export failed: ${e.message}`);
-    }
-  }, [activePdfId]);
+  // ─── Export PDF (QC report + annotated blueprint merged) ────────────────────
+  const [exporting, setExporting] = useState(false);
 
-  // ─── Export PDF ──────────────────────────────────────────────────────────────
-  const handleExportPdf = useCallback(() => {
+  const handleExportPdf = useCallback(async () => {
+    setExporting(true);
+    try {
+      await doExportPdf();
+    } catch(e) {
+      console.error('Export failed:', e);
+      alert(`Export failed: ${e.message}`);
+    } finally {
+      setExporting(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checklist, sections, score, activePdfId]);
+
+  // Separated so the async body can reference state at call time
+  async function doExportPdf() {
     const meta = (() => {
       try { return JSON.parse(localStorage.getItem('voltqc_project_metadata') || '{}'); }
       catch { return {}; }
@@ -308,9 +296,51 @@ export default function App() {
         pageW / 2, doc.internal.pageSize.getHeight() - 8, { align: 'center' });
     }
 
-    const label = meta.projectName ? meta.projectName.replace(/[^a-zA-Z0-9]/g, '_') : 'VoltQC';
-    doc.save(`${label}_QC_Report_${new Date().toISOString().slice(0, 10)}.pdf`);
-  }, [checklist, sections, score]);
+    const label     = meta.projectName ? meta.projectName.replace(/[^a-zA-Z0-9]/g, '_') : 'VoltQC';
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    const filename  = `${label}_QC_Report_${dateStamp}.pdf`;
+
+    // ── Merge with annotated blueprint if one is loaded ────────────────────
+    if (activePdfId) {
+      try {
+        // Get QC report as raw bytes
+        const qcBytes = doc.output('arraybuffer');
+
+        // Fetch annotated blueprint from server
+        const bpRes = await fetch(`${API_BASE}/documents/${activePdfId}/annotated`);
+        if (!bpRes.ok) throw new Error(`Blueprint fetch failed: ${bpRes.status}`);
+        const bpBytes = await bpRes.arrayBuffer();
+
+        // Merge with pdf-lib
+        const merged  = await PDFDocument.create();
+        const qcDoc   = await PDFDocument.load(qcBytes);
+        const bpDoc   = await PDFDocument.load(bpBytes);
+
+        const qcPages = await merged.copyPages(qcDoc, qcDoc.getPageIndices());
+        qcPages.forEach(p => merged.addPage(p));
+
+        const bpPages = await merged.copyPages(bpDoc, bpDoc.getPageIndices());
+        bpPages.forEach(p => merged.addPage(p));
+
+        const mergedBytes = await merged.save({ useObjectStreams: false });
+        const blob        = new Blob([mergedBytes], { type: 'application/pdf' });
+        const url         = URL.createObjectURL(blob);
+        const a           = document.createElement('a');
+        a.href     = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        return; // done — skip plain save below
+      } catch(err) {
+        console.warn('Blueprint merge failed, falling back to QC-only export:', err);
+      }
+    }
+
+    // Fallback: QC report only
+    doc.save(filename);
+  }
 
   // ─── Loading / Error screens ─────────────────────────────────────────────────
   if (loading) {
@@ -393,7 +423,7 @@ export default function App() {
       <Header score={score} activeTab={activeTab} onTabChange={setActiveTab} />
       <div className="flex-1 flex overflow-hidden">
         {/* Left: metadata + full scrollable checklist */}
-        <div className="w-[480px] min-w-[480px] flex flex-col border-r border-volt-border">
+        <div className="w-[400px] min-w-[400px] flex flex-col border-r border-volt-border">
           <ProjectMetadata />
           <Scorecard
             sections={sections}
@@ -404,8 +434,7 @@ export default function App() {
             onCommentSave={handleCommentSave}
             onReset={handleReset}
             onExport={handleExportPdf}
-            onExportAnnotated={handleExportAnnotated}
-            hasActivePdf={!!activePdfId}
+            exporting={exporting}
           />
         </div>
         {/* Right: real PDF viewer */}
