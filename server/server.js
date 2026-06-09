@@ -265,6 +265,14 @@ app.post('/api/scan', async (req, res) => {
   }
 
   try {
+    // Reset all checklist items to Pending before scanning so the score
+    // reflects only the current document, not accumulated prior scans.
+    db.prepare("UPDATE QC_Checklist SET Status = 'Pending', Comments = ''").run();
+    // Re-apply permanent N/A defaults
+    db.prepare("UPDATE QC_Checklist SET Status = 'N/A' WHERE Question LIKE '%feeder schedule%'").run();
+    db.prepare("UPDATE QC_Checklist SET Status = 'N/A' WHERE Question LIKE '%sleeves evenly placed%'").run();
+    db.prepare("UPDATE QC_Checklist SET Status = 'N/A' WHERE Question LIKE '%back edges of sleeves%'").run();
+
     const checklist = getChecklistData();
     const findings = await scanBlueprint(filePath, checklist);
 
