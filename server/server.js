@@ -24,6 +24,22 @@ const db = new Database(DB_PATH);
 try { db.exec("ALTER TABLE QC_Checklist ADD COLUMN sheet_number TEXT DEFAULT ''"); } catch(e) {}
 try { db.exec("ALTER TABLE QC_Checklist ADD COLUMN sheet_title  TEXT DEFAULT ''"); } catch(e) {}
 
+// Back-fill filepath for any document rows that are missing it.
+// These are legacy rows that pre-date the explicit filepath INSERT.
+{
+  const missingPath = db.prepare(
+    "SELECT id, filename FROM Documents WHERE filepath IS NULL OR filepath = ''"
+  ).all();
+  const uploadDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '../uploads');
+  const backfill  = db.prepare("UPDATE Documents SET filepath = ? WHERE id = ?");
+  for (const row of missingPath) {
+    backfill.run(path.join(uploadDir, row.filename), row.id);
+  }
+  if (missingPath.length > 0) {
+    console.log(`[migration] Back-filled filepath for ${missingPath.length} document row(s)`);
+  }
+}
+
 // Canonical section order matching the VDC QC Distribution Template
 const SECTION_ORDER = [
   'PROCESS COMPLIANCE',
@@ -152,25 +168,54 @@ app.post('/api/documents/upload', (req, res) => {
   const { filename, fileSize, content } = req.body;
   if (!filename) return res.status(400).json({ error: 'filename is required' });
   const filepath = path.join(UPLOAD_DIR, filename);
+
+  // Write file to disk
   if (content) {
     const buffer = Buffer.from(content, 'base64');
     fs.writeFileSync(filepath, buffer);
   } else {
     fs.writeFileSync(filepath, 'Mock content for ' + filename);
   }
-  const stmt = db.prepare("INSERT INTO Documents (filename, filepath, status) VALUES (?, ?, 'Queued')");
-  const result = stmt.run(filename, filepath);
-  res.status(201).json({ id: result.lastInsertRowid, filename, status: 'Queued' });
+
+  // Prefer actual on-disk size; fall back to client-reported value
+  let fileSizeBytes = fileSize || 0;
+  try { fileSizeBytes = fs.statSync(filepath).size; } catch(_) {}
+
+  const metadata = JSON.stringify({ file_size_bytes: fileSizeBytes });
+  const now = new Date().toISOString();
+
+  const stmt = db.prepare(
+    "INSERT INTO Documents (filename, filepath, status, metadata, created_at) VALUES (?, ?, 'Queued', ?, ?)"
+  );
+  const result = stmt.run(filename, filepath, metadata, now);
+
+  res.status(201).json({
+    id: result.lastInsertRowid,
+    filename,
+    status: 'Queued',
+    file_size: fileSizeBytes,
+    uploaded_at: now,
+  });
 });
+
+// Resolve the disk path for a document row.
+// Prefers the stored filepath; falls back to UPLOAD_DIR/filename for rows
+// that pre-date the filepath column or were written without it.
+function resolveDocPath(doc) {
+  if (doc.filepath && fs.existsSync(doc.filepath)) return doc.filepath;
+  const fallback = path.join(UPLOAD_DIR, doc.filename);
+  return fs.existsSync(fallback) ? fallback : null;
+}
 
 app.get('/api/documents/:id/file', (req, res) => {
   try {
     const doc = db.prepare('SELECT * FROM Documents WHERE id = ?').get(parseInt(req.params.id));
     if (!doc) return res.status(404).json({ error: 'Document not found' });
-    if (!fs.existsSync(doc.filepath)) return res.status(404).json({ error: 'File not on disk' });
+    const filePath = resolveDocPath(doc);
+    if (!filePath) return res.status(404).json({ error: 'File not on disk' });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="${doc.filename}"`);
-    res.sendFile(path.resolve(doc.filepath));
+    res.sendFile(path.resolve(filePath));
   } catch(e) {
     res.status(500).json({ error: e.message });
   }
@@ -190,14 +235,19 @@ app.get('/api/documents/:id/annotated', async (req, res) => {
   try {
     const doc = db.prepare('SELECT * FROM Documents WHERE id = ?').get(parseInt(req.params.id));
     if (!doc) return res.status(404).json({ error: 'Document not found' });
-    if (!fs.existsSync(doc.filepath)) return res.status(404).json({ error: 'File not on disk' });
+    const filePath = resolveDocPath(doc);
+    if (!filePath) {
+      return res.status(404).json({
+        error: `File not on disk. Expected at: ${doc.filepath || path.join(UPLOAD_DIR, doc.filename)}`
+      });
+    }
 
     // Fetch all NO items from the checklist (these are the flagged/failed items)
     const failedItems = db.prepare(
       "SELECT * FROM QC_Checklist WHERE Status = 'NO' ORDER BY id"
     ).all();
 
-    const pdfBytes = fs.readFileSync(doc.filepath);
+    const pdfBytes = fs.readFileSync(filePath);
     const pdfDoc   = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
 
     if (failedItems.length > 0) {
@@ -374,10 +424,8 @@ app.post('/api/documents/:id/analyze', async (req, res) => {
   try {
     const doc = db.prepare('SELECT * FROM Documents WHERE id = ?').get(parseInt(req.params.id));
     if (!doc) return res.status(404).json({ error: 'Document not found' });
-    const filePath = doc.filepath;
-    if (!fs.existsSync(filePath)) {
-      return res.status(404).json({ error: 'File not found on disk' });
-    }
+    const filePath = resolveDocPath(doc);
+    if (!filePath) return res.status(404).json({ error: 'File not found on disk' });
     const checklist = getChecklistData();
     const findings = await scanBlueprint(filePath, checklist);
     const stmt = db.prepare('UPDATE QC_Checklist SET Status = ?, Comments = ? WHERE id = ?');
