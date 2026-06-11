@@ -67,12 +67,26 @@ ${checklistText}`;
 
   const text = response.text;
 
+  // ── Diagnostic logging ────────────────────────────────────────────────────
+  console.log('\n[gemini] ── RAW RESPONSE (' + text.length + ' chars) ─────────────────────────');
+  console.log(text.slice(0, 4000));
+  if (text.length > 4000) console.log(`[gemini] … (${text.length - 4000} more chars not shown)`);
+  console.log('[gemini] ── END RAW RESPONSE ────────────────────────────────────────────\n');
+
   try {
     const clean = text.replace(/```json|```/g, '').trim();
     const parsed = JSON.parse(clean);
 
+    console.log('[gemini] JSON parsed OK. Top-level keys:', Object.keys(parsed));
+
     // New format: { sheet_number, sheet_title, findings }
     if (parsed && Array.isArray(parsed.findings)) {
+      console.log(`[gemini] findings count: ${parsed.findings.length}`);
+      console.log('[gemini] first 3 findings:', JSON.stringify(parsed.findings.slice(0, 3), null, 2));
+      const yesCnt = parsed.findings.filter(f => f.status === 'YES').length;
+      const noCnt  = parsed.findings.filter(f => f.status === 'NO').length;
+      const naCnt  = parsed.findings.filter(f => f.status === 'N/A').length;
+      console.log(`[gemini] status breakdown — YES:${yesCnt} NO:${noCnt} N/A:${naCnt}`);
       return {
         sheet_number: parsed.sheet_number || '',
         sheet_title:  parsed.sheet_title  || '',
@@ -82,12 +96,17 @@ ${checklistText}`;
 
     // Legacy fallback: plain array
     if (Array.isArray(parsed)) {
+      console.log(`[gemini] Legacy plain-array format, length: ${parsed.length}`);
+      console.log('[gemini] first 3 items:', JSON.stringify(parsed.slice(0, 3), null, 2));
       return { sheet_number: '', sheet_title: '', findings: parsed };
     }
 
+    console.error('[gemini] Unexpected JSON shape — not an object with .findings nor a plain array');
+    console.error('[gemini] Parsed value:', JSON.stringify(parsed).slice(0, 500));
     return { sheet_number: '', sheet_title: '', findings: [] };
   } catch(e) {
-    console.error('Failed to parse Gemini response:', text);
+    console.error('[gemini] JSON parse FAILED:', e.message);
+    console.error('[gemini] Clean text attempted:', text.replace(/```json|```/g, '').trim().slice(0, 500));
     return { sheet_number: '', sheet_title: '', findings: [] };
   }
 }
